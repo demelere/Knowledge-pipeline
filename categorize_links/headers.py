@@ -12,7 +12,8 @@ load_dotenv()
 print(f"GOOGLE_CREDENTIALS_PATH: {os.environ.get('GOOGLE_CREDENTIALS_PATH')}")
 
 # If modifying these scopes, delete the file token.pickle.
-SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
+# SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
+SCOPES = ['https://www.googleapis.com/auth/documents']
 
 def get_credentials():
     creds = None
@@ -54,7 +55,8 @@ def get_document_headers(document_id):
                         if text_run:
                             headers.append({
                                 'level': int(named_style[-1]),
-                                'text': text_run.get('content').strip()
+                                'text': text_run.get('content').strip(),
+                                'style': named_style
                             })
 
     return headers
@@ -63,5 +65,33 @@ def get_document_headers(document_id):
 DOCUMENT_ID = os.environ.get('GOOGLE_DOC_ID')
 
 headers = get_document_headers(DOCUMENT_ID)
+
+# Create a new document with formatted headers
+service = build('docs', 'v1', credentials=get_credentials())
+document = service.documents().create(body={'title': 'Formatted Headers'}).execute()
+doc_id = document['documentId']
+
+requests = []
 for header in headers:
-    print(f"Level {header['level']}: {header['text']}")
+    requests.append({
+        'insertText': {
+            'location': {'index': 1},
+            'text': header['text'] + '\n'
+        }
+    })
+    requests.append({
+        'updateParagraphStyle': {
+            'range': {
+                'startIndex': 1,
+                'endIndex': len(header['text']) + 2
+            },
+            'paragraphStyle': {
+                'namedStyleType': header['style']
+            },
+            'fields': 'namedStyleType'
+        }
+    })
+
+service.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute()
+
+print(f"A new document with formatted headers has been created. Document ID: {doc_id}")
