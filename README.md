@@ -7,3 +7,6 @@ APIs: Twitter API, Readwise API, Instapaper API, Spotify API, Youtube API
 ### Data Processing Layer 
 
 A
+
+`source venv/bin/activate`
+`deactivate`

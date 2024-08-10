@@ -56,10 +56,11 @@ def get_document_headers(document_id):
                             headers.append({
                                 'level': int(named_style[-1]),
                                 'text': text_run.get('content').strip(),
-                                'style': named_style
+                                'style': named_style,
+                                'index': element.get('startIndex')
                             })
 
-    return headers
+    return sorted(headers, key=lambda x: x['index'])
 
 # Replace with your Google Doc ID
 DOCUMENT_ID = os.environ.get('GOOGLE_DOC_ID')
@@ -72,18 +73,19 @@ document = service.documents().create(body={'title': 'Formatted Headers'}).execu
 doc_id = document['documentId']
 
 requests = []
+current_index = 1
 for header in headers:
     requests.append({
         'insertText': {
-            'location': {'index': 1},
+            'location': {'index': current_index},
             'text': header['text'] + '\n'
         }
     })
     requests.append({
         'updateParagraphStyle': {
             'range': {
-                'startIndex': 1,
-                'endIndex': len(header['text']) + 2
+                'startIndex': current_index,
+                'endIndex': current_index + len(header['text']) + 1
             },
             'paragraphStyle': {
                 'namedStyleType': header['style']
@@ -91,6 +93,7 @@ for header in headers:
             'fields': 'namedStyleType'
         }
     })
+    current_index += len(header['text']) + 1
 
 service.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute()
 
