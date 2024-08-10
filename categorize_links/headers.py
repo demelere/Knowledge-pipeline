@@ -1,9 +1,15 @@
 from __future__ import print_function
-import pickle
-import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+import pickle
+import os.path
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
+
+print(f"GOOGLE_CREDENTIALS_PATH: {os.environ.get('GOOGLE_CREDENTIALS_PATH')}")
 
 # If modifying these scopes, delete the file token.pickle.
 SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
@@ -17,8 +23,12 @@ def get_credentials():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
+            credentials_path = os.environ.get('GOOGLE_CREDENTIALS_PATH')
+            if not credentials_path:
+                raise ValueError("GOOGLE_CREDENTIALS_PATH is not set in the environment variables")
+            if not os.path.exists(credentials_path):
+                raise FileNotFoundError(f"The file {credentials_path} does not exist")
+            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
         with open('token.pickle', 'wb') as token:
             pickle.dump(creds, token)
@@ -50,7 +60,7 @@ def get_document_headers(document_id):
     return headers
 
 # Replace with your Google Doc ID
-DOCUMENT_ID = 'your_document_id_here'
+DOCUMENT_ID = os.environ.get('GOOGLE_DOC_ID')
 
 headers = get_document_headers(DOCUMENT_ID)
 for header in headers:
