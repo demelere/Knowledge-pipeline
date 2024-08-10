@@ -53,10 +53,13 @@ def get_document_headers(document_id):
                     if 'HEADING' in named_style:
                         text_run = paragraph.get('elements')[0].get('textRun')
                         if text_run:
+                            level = int(named_style[-1])
+                            new_level = min(level + 1, 6)  # Ensure we don't go beyond H6
+                            new_style = f'HEADING_{new_level}'
                             headers.append({
-                                'level': int(named_style[-1]),
+                                'level': new_level,
                                 'text': text_run.get('content').strip(),
-                                'style': named_style,
+                                'style': new_style,
                                 'index': element.get('startIndex')
                             })
 
