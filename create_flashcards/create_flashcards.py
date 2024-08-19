@@ -1,60 +1,87 @@
 import os
+from typing import List, Tuple
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from openai import OpenAI
+from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent
+from langchain.chains import LLMChain
+from langchain.llms import OpenAI
+from langchain.prompts import StringPromptTemplate
+from langchain.schema import AgentAction, AgentFinish
+from langchain.memory import ConversationBufferMemory
 import genanki
-import random
 
 # Set up Google Docs API
 SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
+creds = Credentials.from_authorized_user_file('path/to/your/credentials.json', SCOPES)
+service = build('docs', 'v1', credentials=creds)
 
-def get_google_docs_service():
-    creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    return build('docs', 'v1', credentials=creds)
+# Set up OpenAI API
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
+llm = OpenAI(temperature=0.7)
 
-def extract_text_with_comments(document_id):
-    service = get_google_docs_service()
-    doc = service.documents().get(documentId=document_id).execute()
-    content = doc.get('body').get('content')
+def get_document_content(document_id: str) -> dict:
+    document = service.documents().get(documentId=document_id).execute()
+    return document
 
-    text_by_comment = {}
+def extract_text_with_comments(document: dict) -> List[Tuple[str, str]]:
+    content = document.get('body', {}).get('content', [])
+    text_with_comments = []
     current_text = ""
-    current_comment = None
+    current_segment_id = None
 
+    # First, extract all the comments
+    comments = {}
+    for comment in document.get('comments', []):
+        comment_id = comment['id']
+        comment_text = comment['content']
+        comments[comment_id] = comment_text
+
+    # Now, process the document content
     for element in content:
         if 'paragraph' in element:
             for run in element['paragraph']['elements']:
                 if 'textRun' in run:
-                    current_text += run['textRun']['content']
-                if 'footnoteReference' in run:
-                    footnote_id = run['footnoteReference']['footnoteId']
-                    footnote = doc['footnotes'][footnote_id]
-                    comment_content = footnote['content'][0]['paragraph']['elements'][0]['textRun']['content']
-                    if comment_content.strip().isdigit():
-                        if current_comment:
-                            text_by_comment.setdefault(current_comment, []).append(current_text.strip())
-                        current_comment = comment_content.strip()
-                        current_text = ""
+                    text = run['textRun']['content']
+                    current_text += text
+                    
+                    # Check if this text run has a comment reference
+                    if 'textStyle' in run['textRun']:
+                        if 'commentIds' in run['textRun']['textStyle']:
+                            comment_id = run['textRun']['textStyle']['commentIds'][0]
+                            comment = comments.get(comment_id, "")
+                            
+                            # Add the text and comment to our list
+                            text_with_comments.append((text, comment))
+                            current_text = ""  # Reset current text
+    
+    # Add any remaining text
+    if current_text:
+        text_with_comments.append((current_text, ""))
 
-    if current_comment:
-        text_by_comment.setdefault(current_comment, []).append(current_text.strip())
+    return text_with_comments
 
-    return text_by_comment
+def group_text_by_identifier(text_with_comments: List[Tuple[str, str]]) -> dict:
+    grouped_text = {}
+    for text, comment in text_with_comments:
+        if comment:
+            identifier = comment.split()[0]  # Assume the first word is the identifier
+            if identifier not in grouped_text:
+                grouped_text[identifier] = []
+            grouped_text[identifier].append(text)
+    return grouped_text
 
-def generate_qa_pair(text, openai_client):
-    prompt = f"Create a concise question-answer pair based on the following text:\n\n{text}\n\nQuestion: "
-    response = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=100
-    )
-    qa_pair = response.choices[0].message.content.strip().split("\n")
-    return qa_pair[0][10:], qa_pair[1][8:]  # Remove "Question: " and "Answer: " prefixes
+def create_flashcard(text: str) -> Tuple[str, str]:
+    prompt = f"Create a question and answer pair for an Anki flashcard based on the following text:\n\n{text}\n\nQuestion:"
+    question = llm(prompt)
+    
+    answer_prompt = f"Now provide a concise answer to the following question:\n\nQuestion: {question}\n\nAnswer:"
+    answer = llm(answer_prompt)
+    
+    return question.strip(), answer.strip()
 
-def create_anki_deck(qa_pairs):
-    model_id = random.randrange(1 << 30, 1 << 31)
+def create_anki_deck(flashcards: List[Tuple[str, str]], deck_name: str) -> genanki.Deck:
     model = genanki.Model(
-        model_id,
+        1607392319,
         'Simple Model',
         fields=[
             {'name': 'Question'},
@@ -68,35 +95,48 @@ def create_anki_deck(qa_pairs):
             },
         ])
 
-    deck_id = random.randrange(1 << 30, 1 << 31)
-    deck = genanki.Deck(deck_id, "Google Docs Flashcards")
+    deck = genanki.Deck(2059400110, deck_name)
 
-    for question, answer in qa_pairs:
+    for question, answer in flashcards:
         note = genanki.Note(
             model=model,
-            fields=[question, answer]
-        )
+            fields=[question, answer])
         deck.add_note(note)
 
     return deck
 
-def main():
-    document_id = input("Enter the Google Doc ID: ")
-    openai_api_key = input("Enter your OpenAI API key: ")
+class GoogleDocsAnkiAgent(StringPromptTemplate):
+    def format(self, **kwargs) -> str:
+        return "You are an AI assistant that helps create Anki flashcards from Google Docs content."
 
-    openai_client = OpenAI(api_key=openai_api_key)
+    def _extract_tool_and_input(self, text: str) -> Tuple[str, str]:
+        parts = text.split(":", 1)
+        if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip()
+        else:
+            return "", text.strip()
 
-    text_by_comment = extract_text_with_comments(document_id)
-    qa_pairs = []
+    def parse(self, output: str) -> AgentAction:
+        action, action_input = self._extract_tool_and_input(output)
+        return AgentAction(tool=action, tool_input=action_input, log=output)
 
-    for comment, texts in text_by_comment.items():
-        full_text = " ".join(texts)
-        question, answer = generate_qa_pair(full_text, openai_client)
-        qa_pairs.append((question, answer))
+def run_agent(document_id: str, deck_name: str):
+    document = get_document_content(document_id)
+    text_with_comments = extract_text_with_comments(document)
+    grouped_text = group_text_by_identifier(text_with_comments)
+    
+    flashcards = []
+    for identifier, texts in grouped_text.items():
+        combined_text = " ".join(texts)
+        question, answer = create_flashcard(combined_text)
+        flashcards.append((question, answer))
+    
+    deck = create_anki_deck(flashcards, deck_name)
+    genanki.Package(deck).write_to_file(f"{deck_name}.apkg")
 
-    deck = create_anki_deck(qa_pairs)
-    genanki.Package(deck).write_to_file('google_docs_flashcards.apkg')
-    print("Anki deck created: google_docs_flashcards.apkg")
+    print(f"Anki deck '{deck_name}' has been created with {len(flashcards)} flashcards.")
 
 if __name__ == "__main__":
-    main()
+    document_id = "your-google-doc-id"
+    deck_name = "My Anki Deck"
+    run_agent(document_id, deck_name)
