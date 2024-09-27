@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import os
 import pickle
 import logging
+import difflib
 
 # Load environment variables
 load_dotenv()
@@ -85,21 +86,60 @@ def extract_text_from_url(url):
         logger.error(f"Error extracting text from {url}: {e}")
         return ""
 
-def categorize_and_summarize(text, headings, url):
-    if "youtube.com" in url or "youtu.be" in url:
-        logger.info(f"Categorizing YouTube link as Unsorted: {url}")
-        return "Unsorted", "This is a YouTube link."
+def find_closest_heading(returned_category, existing_headings):
+    closest_match = difflib.get_close_matches(returned_category, existing_headings, n=1)
+    if closest_match:
+        return closest_match[0]
+    return None
 
-    prompt = f"Categorize the following text into one of these categories: {', '.join(headings)}. If it doesn't fit any category, categorize it as 'Unsorted'. Then provide a brief summary (max 100 words).\n\nText: {text[:1000]}"
+def batch_categorize_and_summarize(links, headings):
+    prompt = (
+        f"Categorize the following texts into one of these categories exactly as they are written: "
+        f"{', '.join(headings)}. If it doesn't fit any category, categorize it as 'Unsorted'. "
+        f"Then provide a brief summary (max 100 words) for each.\n\n"
+    )
+    for i, link in enumerate(links):
+        prompt += f"Link {i+1}: {link['text'][:1000]}\n\n"
+
     response = client.chat.completions.create(model="gpt-3.5-turbo",
     messages=[
         {"role": "system", "content": "You are a helpful assistant that categorizes and summarizes text."},
         {"role": "user", "content": prompt}
     ])
     result = response.choices[0].message.content
-    category, summary = result.split('\n\n', 1)
-    logger.info(f"Categorized link: {url} as {category.split(': ')[1]}")
-    return category.split(': ')[1], summary
+    
+    # Parse the structured response
+    categorized_links = []
+    for i, link in enumerate(links):
+        link_prompt = f"Link {i+1}:"
+        if link_prompt in result:
+            start_idx = result.index(link_prompt) + len(link_prompt)
+            end_idx = result.find(f"Link {i+2}:", start_idx) if i+2 <= len(links) else len(result)
+            link_result = result[start_idx:end_idx].strip()
+            if '\n\n' in link_result:
+                category, summary = link_result.split('\n\n', 1)
+                category = category.split(': ')[1]
+                categorized_links.append({
+                    'url': link['url'],
+                    'category': category,
+                    'summary': summary
+                })
+            else:
+                logger.error(f"Unexpected response format for link {i+1}: {link_result}")
+                categorized_links.append({
+                    'url': link['url'],
+                    'category': 'Unsorted',
+                    'summary': 'Unable to categorize and summarize this link.'
+                })
+        else:
+            logger.error(f"Link {i+1} not found in response.")
+            categorized_links.append({
+                'url': link['url'],
+                'category': 'Unsorted',
+                'summary': 'Unable to categorize and summarize this link.'
+            })
+    
+    return categorized_links
 
 def update_document(document_id, updates):
     if not updates:
@@ -120,29 +160,77 @@ def main(document_id):
     updates = []
 
     for heading, links in headings_and_links.items():
-        for link in links:
-            text = extract_text_from_url(link)
-            category, summary = categorize_and_summarize(text, headings_and_links.keys(), link)
+        link_batches = [links[i:i + 15] for i in range(0, len(links), 15)]
+        for batch in link_batches:
+            link_texts = [{'url': link, 'text': extract_text_from_url(link)} for link in batch]
+            categorized_links = batch_categorize_and_summarize(link_texts, headings_and_links.keys())
 
-            if category != "Unsorted":
-                # Move link to new category
+            for link_info in categorized_links:
+                link = link_info['url']
+                category = link_info['category']
+                summary = link_info['summary']
+
+                if category == "Unsorted":
+                    logger.info(f"Link {link} remains under Unsorted.")
+                    continue
+
+                closest_heading = find_closest_heading(category, headings_and_links.keys())
+                if not closest_heading:
+                    logger.error(f"Category '{category}' not found in document headings. Skipping link: {link}")
+                    continue
+
+                # Find the start and end indices of the link in the document content
+                start_index = end_index = None
+                for element in content:
+                    if 'paragraph' in element:
+                        paragraph = element['paragraph']
+                        if 'elements' in paragraph:
+                            for elem in paragraph['elements']:
+                                if 'textRun' in elem and link in elem['textRun']['content']:
+                                    start_index = elem['startIndex']
+                                    end_index = elem['endIndex']
+                                    logger.info(f"Found link at indices: start={start_index}, end={end_index}")
+                                    break
+                    if start_index and end_index:
+                        break
+
+                if not start_index or not end_index:
+                    logger.warning(f"Link not found in document: {link}")
+                    continue
+
+                logger.info(f"Preparing to move link from {heading} to {closest_heading}")
+
+                # Find the insert index for the new category
+                if headings_and_links[closest_heading]:
+                    insert_index = headings_and_links[closest_heading][-1].end() + 1
+                else:
+                    # Find the end index of the heading itself
+                    for element in content:
+                        if 'paragraph' in element:
+                            paragraph = element['paragraph']
+                            if 'elements' in paragraph and 'textRun' in paragraph['elements'][0]:
+                                text = paragraph['elements'][0]['textRun']['content'].strip()
+                                if text == closest_heading:
+                                    insert_index = paragraph['elements'][0]['endIndex']
+                                    break
+
                 updates.append({
                     'deleteContentRange': {
                         'range': {
-                            'startIndex': link.start(),
-                            'endIndex': link.end() + 1
+                            'startIndex': start_index,
+                            'endIndex': end_index
                         }
                     }
                 })
                 updates.append({
                     'insertText': {
                         'location': {
-                            'index': headings_and_links[category][-1].end() + 1
+                            'index': insert_index
                         },
                         'text': f"\n{link}\n• {summary}\n"
                     }
                 })
-                logger.info(f"Prepared update for link: {link}")
+                logger.info(f"Prepared update for link: {link} with summary: {summary}")
 
     update_document(document_id, updates)
 
