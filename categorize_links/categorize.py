@@ -1,114 +1,113 @@
-import os
+import re
+import requests
+from bs4 import BeautifulSoup
+import openai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from langchain.llms import OpenAI
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-import re
+from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
+import os
 
+# Load environment variables
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-GOOGLE_DOC_ID = os.getenv('GOOGLE_DOC_ID')
-GOOGLE_CREDENTIALS_PATH = os.getenv('GOOGLE_CREDENTIALS_PATH')
+# Set up OpenAI API key
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
-if not all([OPENAI_API_KEY, GOOGLE_DOC_ID, GOOGLE_CREDENTIALS_PATH]):
-    raise ValueError("Missing required environment variables. Please check your .env file.")
-
-os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
-
+# Set up Google Docs API
 SCOPES = ['https://www.googleapis.com/auth/documents']
-creds = Credentials.from_authorized_user_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
+creds = Credentials.from_authorized_user_file(os.getenv('GOOGLE_CREDENTIALS_PATH'), SCOPES)
 docs_service = build('docs', 'v1', credentials=creds)
 
-llm = OpenAI(temperature=0.7)
+def get_document_content(document_id):
+    try:
+        document = docs_service.documents().get(documentId=document_id).execute()
+        return document['body']['content']
+    except HttpError as error:
+        print(f"An error occurred: {error}")
+        return None
 
-def get_document_content(doc_id):
-    document = docs_service.documents().get(documentId=doc_id).execute()
-    return document
-
-def update_document(doc_id, requests):
-    docs_service.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute()
-
-def extract_links_and_headers(content):
-    links = []
-    headers = []
-    unsorted_section = False
-    unsorted_start_index = None
-    
-    for element in content['body']['content']:
+def extract_headings_and_links(content):
+    headings = {}
+    current_heading = "Unsorted"
+    for element in content:
         if 'paragraph' in element:
-            para = element['paragraph']
-            if 'elements' in para:
-                for elem in para['elements']:
-                    if 'textRun' in elem:
-                        text = elem['textRun']['content'].strip()
-                        if para.get('paragraphStyle', {}).get('namedStyleType', '').startswith('HEADING'):
-                            headers.append((text, elem['startIndex']))
-                            if text.lower() == "unsorted":
-                                unsorted_section = True
-                                unsorted_start_index = elem['startIndex']
-                            elif unsorted_section:
-                                unsorted_section = False
-                        elif 'link' in elem['textRun'] and unsorted_section:
-                            links.append((text, elem['startIndex'], elem['endIndex']))
-    
-    return links, headers, unsorted_start_index
+            paragraph = element['paragraph']
+            if 'paragraphStyle' in paragraph and paragraph['paragraphStyle'].get('namedStyleType') == 'HEADING_1':
+                current_heading = paragraph['elements'][0]['textRun']['content'].strip()
+                headings[current_heading] = []
+            elif 'bullet' in paragraph:
+                text = paragraph['elements'][0]['textRun']['content']
+                match = re.search(r'(https?://\S+)', text)
+                if match:
+                    headings[current_heading].append(match.group(1))
+    return headings
 
-def categorize_and_summarize(link, headers):
-    prompt = PromptTemplate(
-        input_variables=["link", "headers"],
-        template="Categorize the following link under one of these headers: {headers}\n\nLink: {link}\n\nCategory:"
+def extract_text_from_url(url):
+    try:
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        return soup.get_text()
+    except Exception as e:
+        print(f"Error extracting text from {url}: {e}")
+        return ""
+
+def categorize_and_summarize(text, headings):
+    prompt = f"Categorize the following text into one of these categories: {', '.join(headings)}. If it doesn't fit any category or is a YouTube link, categorize it as 'Unsorted'. Then provide a brief summary (max 100 words).\n\nText: {text[:1000]}"
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant that categorizes and summarizes text."},
+            {"role": "user", "content": prompt}
+        ]
     )
-    chain = LLMChain(llm=llm, prompt=prompt)
-    category = chain.run(link=link, headers=", ".join([h[0] for h in headers if h[0].lower() != "unsorted"]))
+    result = response.choices[0].message.content
+    category, summary = result.split('\n\n', 1)
+    return category.split(': ')[1], summary
 
-    if not any(link.startswith(prefix) for prefix in ['https://www.youtube.com', 'https://youtu.be']):
-        summary_prompt = PromptTemplate(
-            input_variables=["link"],
-            template="Summarize the content of this link in one brief bullet point:\n\nLink: {link}\n\nSummary:"
-        )
-        summary_chain = LLMChain(llm=llm, prompt=summary_prompt)
-        summary = summary_chain.run(link=link)
-    else:
-        summary = "• [YouTube video - not summarized]"
+def update_document(document_id, updates):
+    try:
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': updates}).execute()
+    except HttpError as error:
+        print(f"An error occurred: {error}")
 
-    return category.strip(), summary.strip()
+def main(document_id):
+    content = get_document_content(document_id)
+    if not content:
+        return
 
-def process_document(doc_id):
-    content = get_document_content(doc_id)
-    links, headers, unsorted_start_index = extract_links_and_headers(content)
+    headings_and_links = extract_headings_and_links(content)
+    updates = []
 
-    requests = []
-    for link_text, start_index, end_index in links:
-        category, summary = categorize_and_summarize(link_text, headers)
-        
-        target_header = next((h for h in headers if h[0].lower() == category.lower() and h[0].lower() != "unsorted"), None)
-        
-        if target_header:
-            requests.append({
-                'cutPasteRange': {
-                    'source': {
-                        'startIndex': start_index,
-                        'endIndex': end_index
-                    },
-                    'destination': {
-                        'index': target_header[1]
+    for heading, links in headings_and_links.items():
+        for link in links:
+            if heading != "Unsorted" or "youtube.com" in link:
+                continue
+
+            text = extract_text_from_url(link)
+            category, summary = categorize_and_summarize(text, headings_and_links.keys())
+
+            if category != "Unsorted":
+                # Move link to new category
+                updates.append({
+                    'deleteContentRange': {
+                        'range': {
+                            'startIndex': link.start(),
+                            'endIndex': link.end() + 1
+                        }
                     }
-                }
-            })
-            
-            requests.append({
-                'insertText': {
-                    'location': {
-                        'index': target_header[1]
-                    },
-                    'text': f"\n{summary}\n"
-                }
-            })
+                })
+                updates.append({
+                    'insertText': {
+                        'location': {
+                            'index': headings_and_links[category][-1].end() + 1
+                        },
+                        'text': f"\n{link}\n• {summary}\n"
+                    }
+                })
 
-    update_document(doc_id, requests)
+    update_document(document_id, updates)
 
-doc_id = GOOGLE_DOC_ID
-process_document(doc_id)
+if __name__ == "__main__":
+    document_id = os.getenv('GOOGLE_DOC_ID')
+    main(document_id)

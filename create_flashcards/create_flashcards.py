@@ -2,21 +2,19 @@ import os
 from typing import List, Tuple
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from langchain.agents import Tool, AgentExecutor, LLMSingleActionAgent
-from langchain.chains import LLMChain
-from langchain.llms import OpenAI
-from langchain.prompts import StringPromptTemplate
-from langchain.schema import AgentAction, AgentFinish
-from langchain.memory import ConversationBufferMemory
+from langchain.llms.openai import Openai
 import genanki
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up Google Docs API
 SCOPES = ['https://www.googleapis.com/auth/documents.readonly']
-creds = Credentials.from_authorized_user_file('path/to/your/credentials.json', SCOPES)
+creds = Credentials.from_authorized_user_file(os.getenv('GOOGLE_CREDENTIALS_PATH'), SCOPES)
 service = build('docs', 'v1', credentials=creds)
 
 # Set up OpenAI API
-os.environ["OPENAI_API_KEY"] = "your-openai-api-key"
 llm = OpenAI(temperature=0.7)
 
 def get_document_content(document_id: str) -> dict:
