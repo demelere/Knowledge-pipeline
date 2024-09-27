@@ -1,7 +1,7 @@
 import re
 import requests
 from bs4 import BeautifulSoup
-import openai
+from openai import OpenAI
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -15,12 +15,13 @@ import logging
 # Load environment variables
 load_dotenv()
 
+client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Set up OpenAI API key
-openai.api_key = os.getenv('OPENAI_API_KEY')
 
 # Set up Google Docs API
 SCOPES = ['https://www.googleapis.com/auth/documents']
@@ -90,13 +91,11 @@ def categorize_and_summarize(text, headings, url):
         return "Unsorted", "This is a YouTube link."
 
     prompt = f"Categorize the following text into one of these categories: {', '.join(headings)}. If it doesn't fit any category, categorize it as 'Unsorted'. Then provide a brief summary (max 100 words).\n\nText: {text[:1000]}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that categorizes and summarizes text."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+    response = client.chat.completions.create(model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant that categorizes and summarizes text."},
+        {"role": "user", "content": prompt}
+    ])
     result = response.choices[0].message.content
     category, summary = result.split('\n\n', 1)
     logger.info(f"Categorized link: {url} as {category.split(': ')[1]}")
