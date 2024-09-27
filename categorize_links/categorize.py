@@ -67,7 +67,7 @@ def extract_headings_and_links(content):
                 current_heading = paragraph['elements'][0]['textRun']['content'].strip()
                 headings[current_heading] = []
                 logger.info(f"Found heading: {current_heading}")
-            elif 'bullet' in paragraph:
+            elif 'elements' in paragraph:
                 text = paragraph['elements'][0]['textRun']['content']
                 match = re.search(r'(https?://\S+)', text)
                 if match:
