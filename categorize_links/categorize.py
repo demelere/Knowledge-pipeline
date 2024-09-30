@@ -92,7 +92,7 @@ def batch_categorize_and_summarize(links, headings):
     prompt = (
         f"Categorize the following texts into one of these categories exactly as they are written: "
         f"{', '.join(headings)}. If it doesn't fit any category, categorize it as 'Unsorted'. "
-        f"Then provide a brief summary (max 100 words) for each.\n\n"
+        f"Then provide a brief summary (max 100 words) for each, using the keywords 'Category' and 'Summary'.\n\n"
     )
     for i, link in enumerate(links):
         prompt += f"Link {i+1}: {link['text'][:1000]}\n\n"
@@ -192,15 +192,6 @@ def main(document_id):
                 category = link_info['category']
                 summary = link_info['summary']
 
-                if category == "Unsorted":
-                    logger.info(f"Link {link} remains under Unsorted.")
-                    continue
-
-                closest_heading = find_closest_heading(category, headings_and_links.keys())
-                if not closest_heading:
-                    logger.error(f"Category '{category}' not found in document headings. Skipping link: {link}")
-                    continue
-
                 # Find the start and end indices of the link in the document content
                 start_index = end_index = None
                 for element in content:
@@ -220,41 +211,89 @@ def main(document_id):
                     logger.warning(f"Link not found in document: {link}")
                     continue
 
-                logger.info(f"Preparing to move link from {heading} to {closest_heading}")
-
-                # Find the insert index for the new category
-                if headings_and_links[closest_heading]:
-                    insert_index = headings_and_links[closest_heading][-1].end() + 1
+                if category == "Unsorted":
+                    logger.info(f"Link {link} remains under Unsorted.")
+                    insert_index = end_index + 1
                 else:
-                    # Find the end index of the heading itself
-                    for element in content:
-                        if 'paragraph' in element:
-                            paragraph = element['paragraph']
-                            if 'elements' in paragraph and 'textRun' in paragraph['elements'][0]:
-                                text = paragraph['elements'][0]['textRun']['content'].strip()
-                                if text == closest_heading:
-                                    insert_index = paragraph['elements'][0]['endIndex']
-                                    break
+                    closest_heading = find_closest_heading(category, headings_and_links.keys())
+                    if not closest_heading:
+                        logger.error(f"Category '{category}' not found in document headings. Skipping link: {link}")
+                        continue
 
-                updates.append({
-                    'deleteContentRange': {
-                        'range': {
-                            'startIndex': start_index,
-                            'endIndex': end_index
+                    logger.info(f"Preparing to move link from {heading} to {closest_heading}")
+
+                    # Find the insert index for the new category
+                    logger.info(f"Finding insert index for category: {closest_heading}")
+                    if headings_and_links[closest_heading]:
+                        insert_index = headings_and_links[closest_heading][-1].end() + 1
+                        logger.info(f"Insert index found at end of last link: {insert_index}")
+                    else:
+                        logger.info(f"No existing links for {closest_heading}, searching for heading end index")
+                        # Find the end index of the heading itself
+                        for element in content:
+                            if 'paragraph' in element:
+                                paragraph = element['paragraph']
+                                if 'elements' in paragraph and 'textRun' in paragraph['elements'][0]:
+                                    text = paragraph['elements'][0]['textRun']['content'].strip()
+                                    if text == closest_heading:
+                                        insert_index = paragraph['elements'][0]['endIndex']
+                                        logger.info(f"Insert index found at end of heading: {insert_index}")
+                                        break
+                        else:
+                            logger.warning(f"Could not find end index for heading: {closest_heading}")
+
+                    logger.info(f"Preparing to delete content range: start={start_index}, end={end_index}")
+                    updates.append({
+                        'deleteContentRange': {
+                            'range': {
+                                'startIndex': start_index,
+                                'endIndex': end_index
+                            }
                         }
-                    }
-                })
+                    })
+
+                # Ensure the insert index is within the valid range
+                if insert_index >= end_index:
+                    insert_index = end_index - 1
+                    logger.info(f"Adjusted insert index to {insert_index} to ensure it's within valid range")
+
+                # Insert a newline character before the summary text
                 updates.append({
                     'insertText': {
                         'location': {
                             'index': insert_index
                         },
-                        'text': f"\n{link}\n• {summary}\n"
+                        'text': "\n"
+                    }
+                })
+
+                # Insert the summary text
+                updates.append({
+                    'insertText': {
+                        'location': {
+                            'index': insert_index + 1
+                        },
+                        'text': f"{summary}\n"
+                    }
+                })
+
+                # Format the inserted text as a bullet point
+                # Format the inserted summary text as a bullet point
+                updates.append({
+                    'createParagraphBullets': {
+                        'range': {
+                            'startIndex': insert_index + 1,
+                            'endIndex': insert_index + 1 + len(summary) + 1  # +1 for the newline at the end
+                        },
+                        'bulletPreset': 'BULLET_DISC_CIRCLE_SQUARE'
                     }
                 })
                 logger.info(f"Prepared update for link: {link} with summary: {summary}")
 
-    update_document(document_id, updates)
+    try:
+        update_document(document_id, updates)
+    except HttpError as e:
+        logger.error(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     document_id = os.getenv('GOOGLE_DOC_ID')
