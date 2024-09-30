@@ -81,16 +81,12 @@ def extract_text_from_url(url):
     try:
         response = requests.get(url)
         soup = BeautifulSoup(response.text, 'html.parser')
-        return soup.get_text()
+        extracted_text = soup.get_text()
+        logger.info(f"Extracted text from {url}: {extracted_text[:500]}...")  # Log the first 500 characters of the extracted text
+        return extracted_text
     except Exception as e:
         logger.error(f"Error extracting text from {url}: {e}")
         return ""
-
-def find_closest_heading(returned_category, existing_headings):
-    closest_match = difflib.get_close_matches(returned_category, existing_headings, n=1)
-    if closest_match:
-        return closest_match[0]
-    return None
 
 def batch_categorize_and_summarize(links, headings):
     prompt = (
@@ -101,45 +97,71 @@ def batch_categorize_and_summarize(links, headings):
     for i, link in enumerate(links):
         prompt += f"Link {i+1}: {link['text'][:1000]}\n\n"
 
+    logger.info(f"OpenAI API prompt: {prompt}")  # Log the prompt sent to OpenAI
+
     response = client.chat.completions.create(model="gpt-3.5-turbo",
     messages=[
         {"role": "system", "content": "You are a helpful assistant that categorizes and summarizes text."},
         {"role": "user", "content": prompt}
     ])
     result = response.choices[0].message.content
+    logger.info(f"OpenAI API response: {result}")  # Log the response from OpenAI
     
     # Parse the structured response
     categorized_links = []
+    response_lines = result.split('\n')
+    logger.info(f"Split response into {len(response_lines)} lines")
     for i, link in enumerate(links):
         link_prompt = f"Link {i+1}:"
-        if link_prompt in result:
-            start_idx = result.index(link_prompt) + len(link_prompt)
-            end_idx = result.find(f"Link {i+2}:", start_idx) if i+2 <= len(links) else len(result)
-            link_result = result[start_idx:end_idx].strip()
-            if '\n\n' in link_result:
-                category, summary = link_result.split('\n\n', 1)
-                category = category.split(': ')[1]
-                categorized_links.append({
-                    'url': link['url'],
-                    'category': category,
-                    'summary': summary
-                })
-            else:
-                logger.error(f"Unexpected response format for link {i+1}: {link_result}")
-                categorized_links.append({
-                    'url': link['url'],
-                    'category': 'Unsorted',
-                    'summary': 'Unable to categorize and summarize this link.'
-                })
+        logger.info(f"Parsing response for {link_prompt}")
+        logger.debug(f"Full link data: {link}")
+        category = None
+        summary = None
+        for j, line in enumerate(response_lines):
+            logger.debug(f"Processing line {j}: {line}")
+            if line.startswith("Category:"):
+                category = line.split("Category:")[1].strip()
+                logger.info(f"Found category: {category}")
+            elif line.startswith("Summary:"):
+                summary = line.split("Summary:")[1].strip()
+                logger.info(f"Found summary: {summary}")
+            if category and summary:
+                logger.info(f"Both category and summary found for {link_prompt}")
+                break
+        
+        if category and summary:
+            logger.info(f"Successfully parsed category: {category}, summary: {summary}")
+            categorized_link = {
+                'url': link['url'],
+                'category': category,
+                'summary': summary
+            }
+            logger.debug(f"Appending categorized link: {categorized_link}")
+            categorized_links.append(categorized_link)
         else:
-            logger.error(f"Link {i+1} not found in response.")
-            categorized_links.append({
+            logger.error(f"Unexpected response format for {link_prompt}")
+            logger.debug(f"Category found: {category}, Summary found: {summary}")
+            categorized_link = {
                 'url': link['url'],
                 'category': 'Unsorted',
                 'summary': 'Unable to categorize and summarize this link.'
-            })
+            }
+            logger.debug(f"Appending default categorized link: {categorized_link}")
+            categorized_links.append(categorized_link)
+        
+        logger.info(f"Finished processing {link_prompt}")
+    
+    logger.info(f"Total categorized links: {len(categorized_links)}")
+    logger.debug(f"Final categorized_links: {categorized_links}")
     
     return categorized_links
+
+def find_closest_heading(returned_category, existing_headings):
+    closest_match = difflib.get_close_matches(returned_category, existing_headings, n=1)
+    if closest_match:
+        logger.info(f"Closest match for category '{returned_category}': {closest_match[0]}")  # Log the closest match result
+        return closest_match[0]
+    return None
 
 def update_document(document_id, updates):
     if not updates:
