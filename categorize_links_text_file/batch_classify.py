@@ -74,13 +74,29 @@ def classify_links(filepath):
         prompt = f"""Given these categories:
 {', '.join(categories)}
 
-Classify each content excerpt into exactly one of these categories. Return results as:
+Classify each content excerpt into exactly one of these categories. You must categorize each URL into exactly one of the following categories, using the exact text shown below:
+
+- shipbuilding
+- skilled trades and welding
+- outreach, communication, sales, and pitching
+- startup operating principles
+- personal productivity system
+- robotics, hardware, and electronics
+- machine learning, deep learning, foundation models, artificial intelligence
+- 3D, 3D reconstruction, and spatial computing
+- unsorted
+
+Do not create new categories or modify these category names. If a URL doesn't clearly fit into any category, use "unsorted".
+
+Return results as:
 URL1: category1
 URL2: category2
 etc.
 
 Content excerpts:
 """ + "\n\n".join([f"URL{j+1}: {c}" for j,c in enumerate(contents)])
+
+        logging.info(f"Generated prompt: {prompt}")
 
         logging.info("Sending batch to OpenAI for classification...")
         response = client.chat.completions.create(
@@ -133,6 +149,6 @@ Content excerpts:
 # Usage
 if __name__ == "__main__":
     try:
-        classify_links('sorted_links.txt')
+        classify_links('test.txt')
     except Exception as e:
         logging.error(f"Program failed with error: {str(e)}")
