@@ -110,12 +110,14 @@ Content excerpts:
         
         for j, result in enumerate(results):
             if ':' in result:
-                category = result.split(':')[1].strip()
-                if category in categories:
-                    classified_links.setdefault(category, []).append(batch[j])
-                    logging.info(f"Classified {batch[j].strip()} as {category}")
-                else:
-                    logging.warning(f"Received invalid category '{category}' for {batch[j].strip()}")
+                url_index = int(result.split(':')[0].replace('URL', '')) - 1
+                if url_index < len(batch):  # Ensure we have a valid index
+                    category = result.split(':')[1].strip()
+                    if category in categories:
+                        classified_links.setdefault(category, []).append(batch[url_index].strip() + '\n')
+                        logging.info(f"Classified {batch[url_index].strip()} as {category}")
+                    else:
+                        logging.warning(f"Received invalid category '{category}' for {batch[url_index].strip()}")
     
     # Reconstruct file
     logging.info("Reconstructing output file...")
