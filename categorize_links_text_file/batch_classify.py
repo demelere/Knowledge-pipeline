@@ -13,7 +13,7 @@ logging.basicConfig(
 def extract_content(url):
     try:
         logging.info(f"Fetching content from: {url}")
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=60)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Remove scripts, styles, etc.
@@ -151,6 +151,6 @@ Content excerpts:
 # Usage
 if __name__ == "__main__":
     try:
-        classify_links('test.txt')
+        classify_links('sorted_links_ex_twitter_v2.txt')
     except Exception as e:
         logging.error(f"Program failed with error: {str(e)}")

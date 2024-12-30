@@ -92,7 +92,7 @@ def batch_categorize_and_summarize(links, headings):
     prompt = (
         f"Categorize each of the following texts into one of these categories exactly as they are written: "
         f"{', '.join(headings)}. If it doesn't fit any category, categorize it as 'Unsorted'. "
-        f"Then provide a brief summary (max 100 words) for each. Bias the summary towards towards unique, actionable, new insights.  Do not waste time beginning the summary with phrases like 'this blog,' 'this article', 'this post', 'this content', 'this site', etc.  Skip to the insights "
+        f"Then provide a brief summary (min 90 words, max 100 words) for each. Bias the summary towards towards unique, actionable, new insights.  Do not waste time beginning the summary with phrases like 'this blog,' 'this article', 'this post', 'this content', 'this site', etc.  Skip to the insights "
         f"For each text, always summarize and categorize in given format: \n\n"
         f"[number]:\nCategory: [category]\nSummary: [summary]\n\n"
         f"Always use the brackets [] to wrap the number "
@@ -303,61 +303,67 @@ def main(document_id):
                     }
                 })
 
-                # Find the second occurrence of the link in the document
-                # Search for the link under the Unsorted header
-                unsorted_index = None
-                link_index = None
-                logger.info(f"Searching for link: {link} under Unsorted header")
-                for element in content:
-                    if 'paragraph' in element:
-                        paragraph = element['paragraph']
-                        if 'paragraphStyle' in paragraph and paragraph['paragraphStyle'].get('namedStyleType') == 'HEADING_1':
-                            if paragraph['elements'][0]['textRun']['content'].strip() == "Unsorted":
-                                unsorted_index = paragraph['elements'][0]['startIndex']
-                                logger.info(f"Found Unsorted header at index: {unsorted_index}")
-                        elif unsorted_index is not None:
-                            for paragraph_element in paragraph.get('elements', []):
-                                if 'textRun' in paragraph_element:
-                                    text = paragraph_element['textRun'].get('content', '')
-                                    # logger.debug(f"Checking text: {text[:50]}...")  # Log first 50 characters
-                                    if link in text:
-                                        link_index = paragraph_element['startIndex']
-                                        logger.info(f"Found link at index: {link_index}")
-                                        break
-                    if link_index:
-                        logger.info(f"Link found and processing complete")
-                        break
-                if not link_index:
-                    logger.warning(f"Link not found under Unsorted header: {link}")
-
-                if link_index:
-                    # Highlight the original link in red
-                    updates.append({
-                        'updateTextStyle': {
-                            'range': {
-                                'startIndex': link_index,
-                                'endIndex': link_index + len(link)
-                            },
-                            'textStyle': {
-                                'foregroundColor': {
-                                    'color': {
-                                        'rgbColor': {
-                                            'red': 1.0,
-                                            'green': 0.0,
-                                            'blue': 0.0
-                                        }
-                                    }
-                                }
-                            },
-                            'fields': 'foregroundColor'
-                        }
-                    })
-                else:
-                    logger.warning(f"Could not find link under Unsorted header: {link}")
-                
-
                 # # Update the insert_index for the next iteration
                 insert_index += len(summary) + len(link) + 2  # +2 for the two newline characters
+
+            # # After processing each batch, mark links under 'Unsorted' as processed
+            # # Find the index of the 'Unsorted' heading
+            # # Initialize a variable to store the index of the 'Unsorted' heading
+            # unsorted_index = None
+            # # Find the end index of the last Heading 1 (assumed to be the Unsorted header)
+            # # Iterate through the content in reverse order
+            # # logger.info("Starting search for 'Unsorted' heading")
+            # for index, element in enumerate(reversed(content)):
+            #     # logger.debug(f"Checking element {index}: {element}")
+            #     # Check if the current element is a paragraph
+            #     if 'paragraph' in element:
+            #         logger.debug(f"Element {index} is a paragraph")
+            #         # Check if the paragraph style is 'HEADING_1'
+            #         if element['paragraph'].get('paragraphStyle', {}).get('namedStyleType') == 'HEADING_1':
+            #             logger.info(f"Found HEADING_1 at reversed index {index}")
+            #             # Log the value of the heading found
+            #             heading_text = element['paragraph']['elements'][0]['textRun']['content'].strip()
+            #             logger.info(f"Found heading: {heading_text}")
+            #             # If it's a 'HEADING_1', set unsorted_index to the end index of the last element in this paragraph
+            #             unsorted_index = element['paragraph']['elements'][-1]['endIndex']
+            #             logger.info(f"Set unsorted_index to {unsorted_index}")
+            #             # Exit the loop as we've found the last 'HEADING_1'
+            #             # logger.info("Exiting loop after finding 'Unsorted' heading")
+            #             # If 'Unsorted' heading is found, process the links under it
+            #             if unsorted_index:
+            #                 logger.info(f"Processing links under 'Unsorted' heading (index: {unsorted_index})")
+            #                 logger.info(f"Searching in Batch: {batch}")
+            #                 for link in batch:
+            #                     logger.info(f"Searching for link: {link}")
+            #                     # Search for each link in the content after the 'Unsorted' heading
+            #                     for element_index, element in enumerate(content[unsorted_index:], start=unsorted_index):
+            #                         # Log the contents of the element
+            #                         logger.info(f"Element contents: {element}")
+
+            #                         # Extract all text from the element
+            #                         element_text = ''.join(elem.get('textRun', {}).get('content', '') for elem in element.get('paragraph', {}).get('elements', []))
+            #                         element_text = element_text.lower()
+            #                         link_lower = link.lower()
+
+            #                         # Check if the link or any part of it is in the element text
+            #                         if link_lower in element_text or any(part in element_text for part in link_lower.split('/')):
+            #                             logger.info(f"Found link '{link}' in element")
+            #                             # Find the start index of the link in the element
+            #                             start_index = element['startIndex'] + element_text.index(link_lower)
+            #                             updates.append({
+            #                                 'insertText': {
+            #                                     'location': {'index': start_index},
+            #                                     'text': '[PROCESSED] '
+            #                                 }
+            #                             })
+            #                             logger.debug(f"Added update to mark '{link}' as processed")
+            #                             break  
+            #             else:
+            #                 logger.warning("'Unsorted' index not found. Unable to process links.")                                  
+            #             break
+
+            # else:
+            #     logger.warning("'Unsorted' heading not found. Unable to process links.")
 
     try:
         update_document(document_id, updates)
